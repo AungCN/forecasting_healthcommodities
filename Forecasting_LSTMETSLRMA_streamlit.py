@@ -2,16 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from keras.models import Sequential
-from keras.layers import LSTM, Dense
-from keras import backend as K
 from sklearn.preprocessing import MinMaxScaler
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.ar_model import AutoReg
 from sklearn.metrics import mean_absolute_percentage_error
-
-# 🧹 Clear any previous Keras session ONCE
-K.clear_session()
 
 LAG = 10
 st.set_page_config(page_title="Health Forecasting", layout="wide")
@@ -47,102 +41,33 @@ def apply_adjustment(forecast, dates):
     years = dates.dt.year
     return [v * adjustment_factors.get(y, 1.0) for v, y in zip(forecast, years)]
 
-# Forecasting functions
-def forecast_ets_lstm(data, steps):
+# ETS (no LSTM)
+def forecast_ets(data, steps):
     ets_model = ExponentialSmoothing(data['Consumption'], seasonal='add', seasonal_periods=12).fit()
-    residuals = data['Consumption'] - ets_model.fittedvalues
+    return ets_model.forecast(steps).values
 
-    if len(residuals) <= LAG:
-        return ets_model.forecast(steps).values
-
-    scaler = MinMaxScaler()
-    res_scaled = scaler.fit_transform(residuals.values.reshape(-1, 1))
-
-    X, y = [], []
-    for i in range(LAG, len(res_scaled)):
-        X.append(res_scaled[i - LAG:i])
-        y.append(res_scaled[i])
-
-    if len(X) == 0 or len(y) == 0:
-        return ets_model.forecast(steps).values
-
-    X = np.array(X).reshape((-1, LAG, 1))
-    y = np.array(y)
-
-    model = Sequential([
-        LSTM(50, activation='relu', input_shape=(LAG, 1)),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(X, y, epochs=50, verbose=0)
-
-    input_seq = res_scaled[-LAG:].reshape(1, LAG, 1)
-    res_forecast = []
-    for _ in range(steps):
-        pred = model.predict(input_seq, verbose=0)[0][0]
-        res_forecast.append(pred)
-        input_seq = np.append(input_seq[:, 1:, :], [[[pred]]], axis=1)
-
-    res_forecast = scaler.inverse_transform(np.array(res_forecast).reshape(-1, 1)).flatten()
-    ets_forecast = ets_model.forecast(steps).values
-    return ets_forecast + res_forecast
-
+# Moving Average
 def forecast_moving_average(data, steps):
     avg = data['Consumption'].rolling(window=LAG).mean().iloc[-1]
     return np.full(steps, avg)
 
+# Auto Regression
 def forecast_autoreg(data, steps):
     model = AutoReg(data['Consumption'], lags=LAG).fit()
     return model.forecast(steps)
 
-def forecast_lstm(data, steps):
-    if len(data) < LAG + 1:
-        return np.full(steps, data['Consumption'].iloc[-1])
-
-    scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(data['Consumption'].values.reshape(-1, 1))
-
-    X, y = [], []
-    for i in range(LAG, len(scaled)):
-        X.append(scaled[i - LAG:i])
-        y.append(scaled[i])
-
-    if len(X) == 0 or len(y) == 0:
-        return np.full(steps, data['Consumption'].iloc[-1])
-
-    X = np.array(X).reshape((-1, LAG, 1))
-    y = np.array(y)
-
-    model = Sequential([
-        LSTM(50, activation='relu', input_shape=(LAG, 1)),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(X, y, epochs=50, verbose=0)
-
-    input_seq = scaled[-LAG:].reshape(1, LAG, 1)
-    forecast = []
-    for _ in range(steps):
-        pred = model.predict(input_seq, verbose=0)[0][0]
-        forecast.append(pred)
-        input_seq = np.append(input_seq[:, 1:, :], [[[pred]]], axis=1)
-
-    return scaler.inverse_transform(np.array(forecast).reshape(-1, 1)).flatten()
-
 # Run forecasting
 with st.spinner("⏳ Running forecasting models..."):
     test_forecasts = {
-        'ETS + LSTM': forecast_ets_lstm(train_df, test_steps),
+        'ETS': forecast_ets(train_df, test_steps),
         'Moving Average': forecast_moving_average(train_df, test_steps),
-        'Auto Regression': forecast_autoreg(train_df, test_steps),
-        'LSTM': forecast_lstm(train_df, test_steps)
+        'Auto Regression': forecast_autoreg(train_df, test_steps)
     }
 
     future_forecasts = {
-        'ETS + LSTM': forecast_ets_lstm(df, future_steps),
+        'ETS': forecast_ets(df, future_steps),
         'Moving Average': forecast_moving_average(df, future_steps),
-        'Auto Regression': forecast_autoreg(df, future_steps),
-        'LSTM': forecast_lstm(df, future_steps)
+        'Auto Regression': forecast_autoreg(df, future_steps)
     }
 
 # Assemble forecast DataFrame
@@ -165,7 +90,7 @@ def plot_forecast(method):
     ax.legend()
     st.pyplot(fig)
 
-for method in ['ETS + LSTM', 'Moving Average', 'Auto Regression', 'LSTM']:
+for method in ['ETS', 'Moving Average', 'Auto Regression']:
     plot_forecast(method)
 
 # MAPE evaluation on 2019
@@ -185,7 +110,6 @@ st.download_button(
     file_name="health_forecasts_2020_2027.csv",
     mime="text/csv"
 )
-# Clear Keras session after use
-K.clear_session()
-st.success("✅ Forecasting completed and session cleared.")
+
+st.success("✅ Forecasting completed.")
 st.markdown("Thank you for using the Health Forecasting app! If you have any questions or feedback, please reach out.")
